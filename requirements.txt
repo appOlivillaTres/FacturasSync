@@ -1,0 +1,8 @@
+pdfplumber
+pymupdf
+pywin32
+requests
+pypdf
+python-dotenv
+pytesseract
+Pillow
