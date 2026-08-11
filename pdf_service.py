@@ -1,5 +1,5 @@
 import pdfplumber
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 import re
 import io
 import base64
