@@ -281,6 +281,13 @@ while True:
                     # (YYYY-MM-DD); el regex y a veces la IA la devuelven
                     # en formato español (DD/MM/YYYY).
                     datos["fecha"] = pdf.normalizar_fecha(datos.get("fecha"))
+                    fecha_regex = pdf.normalizar_fecha(pdf.buscar_fecha(datos.get("texto", "")))
+                    if fecha_regex and datos.get("fecha") and fecha_regex != datos["fecha"]:
+                        log(f"AVISO: fecha de la IA ('{datos['fecha']}') no coincide con la del regex ('{fecha_regex}') — revisar '{ruta_pdf}'")
+
+                    numero_regex = pdf.buscar_numero_factura(datos.get("texto", ""))
+                    if numero_regex and datos.get("numero_factura") and numero_regex != datos["numero_factura"]:
+                        log(f"AVISO: número de factura de la IA ('{datos['numero_factura']}') no coincide con el del regex ('{numero_regex}') — revisar '{ruta_pdf}'")
 
                     if datos.get("fecha_vencimiento"):
                         datos["fecha_vencimiento"] = pdf.normalizar_fecha(datos.get("fecha_vencimiento"))

@@ -13,7 +13,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # misma forma de leer archivos/imágenes) porque lee mejor tablas
 # desalineadas, letra pequeña y facturas con mucho ruido — es la mejora
 # de precisión más directa que se puede hacer sin cambiar de API.
-MODELO_FACTURAS = "gpt-4.1"
+MODELO_FACTURAS = "gpt-5"
 
 # Tamaño máximo de PDF que se manda directamente a OpenAI como archivo.
 # Por encima de esto, nos quedamos con el texto ya extraído (evita mandar
