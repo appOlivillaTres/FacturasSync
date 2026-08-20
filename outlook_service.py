@@ -95,6 +95,11 @@ def enviar_correo(destinatario, asunto, cuerpo, cuenta_remitente=None):
     log(f"Correo enviado a {destinatario}" + (f" usando '{cuenta_remitente}'" if cuenta_remitente else " (cuenta por defecto)"))
 
 
+from word_service import convertir_word_a_pdf
+
+EXTENSIONES_DOCUMENTO = (".pdf", ".doc", ".docx")
+
+
 def guardar_adjuntos_pdf(correo, carpeta_destino="temp"):
 
     import os
@@ -108,23 +113,36 @@ def guardar_adjuntos_pdf(correo, carpeta_destino="temp"):
     for i in range(1, correo.Attachments.Count + 1):
 
         adjunto = correo.Attachments.Item(i)
+        nombre_lower = adjunto.FileName.lower()
 
-        if adjunto.FileName.lower().endswith(".pdf"):
+        if not nombre_lower.endswith(EXTENSIONES_DOCUMENTO):
+            continue
 
-            ruta = os.path.join(carpeta_destino, adjunto.FileName)
+        ruta = os.path.join(carpeta_destino, adjunto.FileName)
 
-            if os.path.exists(ruta):
-                nombre, ext = os.path.splitext(adjunto.FileName)
-                ruta = os.path.join(
-                    carpeta_destino,
-                    f"{nombre}_{int(time.time())}{ext}"
-                )
+        if os.path.exists(ruta):
+            nombre, ext = os.path.splitext(adjunto.FileName)
+            ruta = os.path.join(
+                carpeta_destino,
+                f"{nombre}_{int(time.time())}{ext}"
+            )
 
-            try:
-                adjunto.SaveAsFile(ruta)
+        try:
+            adjunto.SaveAsFile(ruta)
+
+            if nombre_lower.endswith((".doc", ".docx")):
+
+                ruta_pdf = convertir_word_a_pdf(ruta)
+
+                if ruta_pdf:
+                    pdfs.append(ruta_pdf)
+                else:
+                    log(f"AVISO: no se pudo convertir '{ruta}' a PDF, se omite este adjunto")
+
+            else:
                 pdfs.append(ruta)
 
-            except Exception as e:
-                print(f"ERROR guardando adjunto: {e}")
+        except Exception as e:
+            print(f"ERROR guardando adjunto: {e}")
 
     return pdfs
