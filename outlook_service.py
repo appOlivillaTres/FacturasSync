@@ -13,14 +13,41 @@ from logger import log
 DISPID_SENDUSINGACCOUNT = 64209
 
 
-def conectar():
+def conectar(correo_cuenta):
+    """
+    Conecta con la bandeja de entrada de una cuenta CONCRETA (no la cuenta
+    por defecto del perfil de Outlook), buscándola entre las cuentas que
+    ya están dadas de alta en este Outlook por su dirección de email. Así
+    se puede leer facturas y albaranes desde dos buzones distintos
+    (facturas@olivillatres.com / almacen@olivillatres.com) aunque ambos
+    estén configurados en el mismo Outlook del PC.
 
-    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+    Lanza un error si la cuenta no está dada de alta en este Outlook, para
+    no acabar leyendo por accidente la bandeja de otra cuenta distinta.
+    """
 
-    # 6 = Bandeja de entrada
-    inbox = outlook.GetDefaultFolder(6)
+    outlook_app = win32com.client.Dispatch("Outlook.Application")
+    namespace = outlook_app.GetNamespace("MAPI")
 
-    log("Bandeja de entrada conectada")
+    cuenta_encontrada = None
+
+    for cuenta in namespace.Accounts:
+        if cuenta.SmtpAddress.lower() == correo_cuenta.lower():
+            cuenta_encontrada = cuenta
+            break
+
+    if not cuenta_encontrada:
+        raise RuntimeError(
+            f"La cuenta '{correo_cuenta}' no está añadida en este Outlook. "
+            f"Añádela en Archivo > Agregar cuenta para poder leer su bandeja de entrada."
+        )
+
+    # 6 = Bandeja de entrada. DeliveryStore es el almacén de correo propio
+    # de ESA cuenta (a diferencia de GetDefaultFolder(6) sobre el
+    # namespace, que coge la cuenta por defecto del perfil sin más).
+    inbox = cuenta_encontrada.DeliveryStore.GetDefaultFolder(6)
+
+    log(f"Bandeja de entrada conectada: '{correo_cuenta}' (carpeta '{inbox.Name}')")
 
     return inbox
 

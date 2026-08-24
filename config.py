@@ -5,6 +5,15 @@ SUPABASE_KEY = "TU_SERVICE_ROLE_KEY"
 
 CARPETA_OUTLOOK = "FACTURAS"
 
+# Cuentas de Outlook separadas por tipo de documento: facturas@ recibe
+# facturas, almacen@ recibe albaranes. Cada una se lee de forma
+# independiente (ver outlook_service.conectar). El tipo de documento ya no
+# se decide adivinando por el contenido del PDF: lo decide el buzón de
+# origen (tipo_documento() se mantiene solo como aviso/red de seguridad —
+# ver main.py).
+CORREO_FACTURAS = "facturas@olivillatres.com"
+CORREO_ALBARANES = "almacen@olivillatres.com"
+
 TEMP_FOLDER = "temp"
 
 LOG_FOLDER = "logs"
