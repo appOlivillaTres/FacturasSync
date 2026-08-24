@@ -154,7 +154,7 @@ def procesar_pdf_albaran(ruta_pdf, datos, pdf, ia, supa):
     log("Albarán insertado en tabla albaranes")
 
 
-def procesar_pdf_factura(ruta_pdf, datos, correo, fecha_recibido_correo, pdf, ia, supa):
+def procesar_pdf_factura(ruta_pdf, datos, remitente, asunto, fecha_recibido_correo, pdf, ia, supa):
     """
     Procesa un PDF que viene del buzón de facturas (facturas@olivillatres.com).
     'datos' es el resultado de pdf.extraer_parcial(ruta_pdf) (ya trae
@@ -322,8 +322,8 @@ def procesar_pdf_factura(ruta_pdf, datos, correo, fecha_recibido_correo, pdf, ia
 
         supa.insertar_factura(
             {
-                "remitente": correo.SenderEmailAddress,
-                "asunto": correo.Subject,
+                "remitente": remitente,
+                "asunto": asunto,
                 "clasificado": False,
                 "fecha_recibido": fecha_recibido_correo
             },
@@ -333,17 +333,23 @@ def procesar_pdf_factura(ruta_pdf, datos, correo, fecha_recibido_correo, pdf, ia
 
 
 def procesar_correo(correo, tipo_forzado, pdf, ia, supa):
-    """
-    tipo_forzado: 'factura' o 'albaran', según el buzón del que viene el
-    correo. Si el contenido del PDF no parece ni factura ni albarán de
-    verdad (p.ej. un presupuesto/proforma colado en el buzón equivocado),
-    se manda igualmente a PENDIENTES en vez de forzarlo — es la única red
-    de seguridad que queda del antiguo tipo_documento().
-    """
+
+    # Se leen TODAS las propiedades del correo que hagan falta al principio,
+    # antes de cualquier llamada de red (Supabase, IA...). Si se leyeran
+    # más tarde, tras varios segundos de espera de una subida a Storage,
+    # la referencia COM al correo puede quedar "desconectada"
+    # (CO_E_OBJNOTCONNECTED / -2147220995) y la lectura falla.
+    try:
+        asunto = correo.Subject
+        remitente = correo.SenderEmailAddress
+        entry_id = correo.EntryID
+    except Exception as e:
+        log(f"ERROR leyendo propiedades básicas del correo, se omite: {e}")
+        return None
 
     log("--------------------------------------")
-    log(f"Asunto: {correo.Subject}")
-    log(f"Remitente: {correo.SenderEmailAddress}")
+    log(f"Asunto: {asunto}")
+    log(f"Remitente: {remitente}")
     log(f"Adjuntos: {correo.Attachments.Count}")
 
     pdfs = guardar_adjuntos_pdf(correo)
@@ -356,7 +362,7 @@ def procesar_correo(correo, tipo_forzado, pdf, ia, supa):
 
     if not pdfs:
         log("No hay PDFs adjuntos.")
-        return
+        return entry_id
 
     for ruta_pdf in pdfs:
 
@@ -388,8 +394,8 @@ def procesar_correo(correo, tipo_forzado, pdf, ia, supa):
 
                 supa.insertar_factura(
                     {
-                        "remitente": correo.SenderEmailAddress,
-                        "asunto": correo.Subject,
+                        "remitente": remitente,
+                        "asunto": asunto,
                         "clasificado": False,
                         "fecha_recibido": fecha_recibido_correo
                     },
@@ -409,11 +415,13 @@ def procesar_correo(correo, tipo_forzado, pdf, ia, supa):
             if tipo_forzado == "albaran":
                 procesar_pdf_albaran(ruta_pdf, datos, pdf, ia, supa)
             else:
-                procesar_pdf_factura(ruta_pdf, datos, correo, fecha_recibido_correo, pdf, ia, supa)
+                procesar_pdf_factura(ruta_pdf, datos, remitente, asunto, fecha_recibido_correo, pdf, ia, supa)
 
         except Exception as e:
 
             log(f"ERROR procesando PDF: {e}")
+
+    return entry_id
 
 
 log("========================================")
@@ -449,30 +457,27 @@ while True:
         nuevos_facturas = obtener_nuevos(carpeta_facturas, estado["ultimo_entryid_facturas"])
 
         for correo in nuevos_facturas:
-            procesar_correo(correo, "factura", pdf, ia, supa)
-            estado["ultimo_entryid_facturas"] = correo.EntryID
-            guardar_estado(estado)
+            entry_id = procesar_correo(correo, "factura", pdf, ia, supa)
+            if entry_id:
+                estado["ultimo_entryid_facturas"] = entry_id
+                guardar_estado(estado)
 
         # ── ALBARANES (almacen@olivillatres.com) ──
         nuevos_albaranes = obtener_nuevos(carpeta_albaranes, estado["ultimo_entryid_albaranes"])
 
         for correo in nuevos_albaranes:
-            procesar_correo(correo, "albaran", pdf, ia, supa)
-            estado["ultimo_entryid_albaranes"] = correo.EntryID
-            guardar_estado(estado)
+            entry_id = procesar_correo(correo, "albaran", pdf, ia, supa)
+            if entry_id:
+                estado["ultimo_entryid_albaranes"] = entry_id
+                guardar_estado(estado)
 
     except Exception as e:
 
         log(f"ERROR GENERAL: {e}")
 
-        # Errores típicos cuando Outlook se cierra, se reinicia o el PC
-        # sale de suspensión y la conexión COM se queda "muerta":
-        #   -2147023174  RPC_S_SERVER_UNAVAILABLE ("El servidor RPC no está disponible")
-        #   -2147352567  Excepción COM genérica de Outlook caído
-        #   -2147417848  "El objeto invocado se ha desconectado de sus clientes"
         codigo = e.args[0] if getattr(e, "args", None) else None
 
-        if codigo in (-2147023174, -2147352567, -2147417848):
+        if codigo in (-2147023174, -2147352567, -2147417848, -2147220995):
 
             log("Conexión con Outlook perdida. Reintentando reconectar...")
 
