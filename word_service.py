@@ -34,9 +34,15 @@ def convertir_word_a_pdf(ruta_word):
     word = None
     doc = None
 
-    # Necesario porque este código puede ejecutarse en un hilo/contexto
-    # distinto al que inicializó COM para Outlook.
-    pythoncom.CoInitialize()
+    # NOTA: NO se llama a pythoncom.CoInitialize()/CoUninitialize() aquí.
+    # Esta función corre en el mismo hilo que toda la automatización de
+    # Outlook (main.py es secuencial, sin hilos separados), y ese hilo ya
+    # tiene COM inicializado desde el principio. Llamar a CoUninitialize()
+    # en el finally destruía TODO el entorno COM del hilo (no solo el de
+    # Word), dejando los objetos de Outlook inutilizables y provocando
+    # errores "No se ha llamado a CoInitialize" en todas las llamadas
+    # posteriores, de los que el bucle de reconexión de main.py nunca
+    # conseguía recuperarse.
 
     try:
         word = win32com.client.Dispatch("Word.Application")
@@ -64,4 +70,3 @@ def convertir_word_a_pdf(ruta_word):
                 word.Quit()
         except Exception:
             pass
-        pythoncom.CoUninitialize()
