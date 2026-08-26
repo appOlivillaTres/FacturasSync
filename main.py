@@ -1,5 +1,9 @@
 import json
+import sys
 import time
+from datetime import datetime, timezone
+
+import msvcrt
 
 from outlook_service import conectar, guardar_adjuntos_pdf
 from pdf_service import PDFService
@@ -14,6 +18,33 @@ from config import (
 )
 
 
+LOCK_FILE = "facturasync.lock"
+
+
+def asegurar_instancia_unica():
+    """
+    Evita que se ejecuten dos copias de main.py a la vez (p.ej. la tarea
+    programada y una ejecución manual desde VS Code coincidiendo, o dos
+    lanzamientos manuales seguidos sin cerrar el anterior). Si ya hay una
+    instancia corriendo, esta se cierra inmediatamente en vez de arrancar
+    y pisar el estado.json / duplicar la lectura de Outlook.
+
+    Se queda con el archivo de lock abierto durante toda la ejecución (la
+    referencia se guarda en una variable global para que no la recoja el
+    recolector de basura) — el bloqueo se libera solo al cerrarse el
+    proceso, sea de forma normal o por un cuelgue.
+    """
+
+    global _lock_handle
+
+    try:
+        _lock_handle = open(LOCK_FILE, "w")
+        msvcrt.locking(_lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        print("Ya hay una instancia de FacturaSync en ejecución. Cerrando esta.")
+        sys.exit(1)
+
+
 def cargar_estado():
 
     try:
@@ -22,15 +53,25 @@ def cargar_estado():
     except:
         estado = {}
 
-    # Compatibilidad con el estado.json antiguo (un único buzón, clave
-    # "ultimo_entryid"): si ya existe pero todavía no hay claves separadas
-    # por buzón, lo reutilizamos como punto de partida de FACTURAS, para
-    # no reprocesar de golpe todo el histórico al pasar a dos buzones.
-    if "ultimo_entryid_facturas" not in estado:
-        estado["ultimo_entryid_facturas"] = estado.get("ultimo_entryid", "")
+    # Compatibilidad con el estado.json antiguo, en dos pasos:
+    #
+    # 1) Formato de un único buzón (clave "ultimo_entryid") → se reutiliza
+    #    como punto de partida de FACTURAS.
+    # 2) Formato de EntryID por buzón ("ultimo_entryid_facturas" /
+    #    "ultimo_entryid_albaranes") → se abandona: el EntryID deja de ser
+    #    válido en cuanto el correo se mueve o se borra de la bandeja (fue
+    #    la causa de que se releyeran años de correo antiguo varias veces).
+    #    Ahora el cursor es la FECHA de recepción, que no depende de que
+    #    el correo siga físicamente ahí. Si no hay fecha guardada todavía,
+    #    se arranca "desde ahora" en vez de desde el principio del
+    #    histórico, para no reprocesar todo de golpe en la migración.
+    if "ultima_fecha_facturas" not in estado:
+        estado["ultima_fecha_facturas"] = datetime.now(timezone.utc).isoformat()
+        log("Migración de estado.json: sin fecha de facturas guardada, se arranca desde ahora (no se reprocesa el histórico).")
 
-    if "ultimo_entryid_albaranes" not in estado:
-        estado["ultimo_entryid_albaranes"] = ""
+    if "ultima_fecha_albaranes" not in estado:
+        estado["ultima_fecha_albaranes"] = datetime.now(timezone.utc).isoformat()
+        log("Migración de estado.json: sin fecha de albaranes guardada, se arranca desde ahora (no se reprocesa el histórico).")
 
     return estado
 
@@ -41,24 +82,40 @@ def guardar_estado(estado):
         json.dump(estado, f, indent=4)
 
 
-def obtener_nuevos(carpeta, ultimo_entryid):
+def obtener_nuevos(carpeta, ultima_fecha_iso):
+    """
+    Devuelve los correos recibidos DESPUÉS de 'ultima_fecha_iso', del más
+    antiguo al más reciente (listos para procesar en orden).
+
+    Antes se comparaba por EntryID del último correo procesado, pero eso
+    falla si ese correo deja de existir en la carpeta tal cual (se mueve,
+    se archiva, se borra...): al no encontrar coincidencia, el bucle
+    recorría TODA la bandeja sin encontrar nunca el punto de corte, y
+    trataba años de correo antiguo como "nuevo" en cada ciclo. La fecha de
+    recepción no tiene ese problema: no depende de que el correo siga
+    físicamente en la carpeta.
+    """
 
     mensajes = carpeta.Items
-    mensajes.Sort("[ReceivedTime]", True)
+    mensajes.Sort("[ReceivedTime]", True)  # más reciente primero
 
     nuevos = []
 
     for correo in mensajes:
 
         try:
+            recibido = correo.ReceivedTime
+        except Exception:
+            continue
 
-            if correo.EntryID == ultimo_entryid:
-                break
+        # Como está ordenado de más reciente a más antiguo, en cuanto
+        # llegamos a un correo recibido antes (o en el mismo instante) que
+        # el último ya procesado, todo lo que queda por delante ya se
+        # procesó en alguna vuelta anterior.
+        if ultima_fecha_iso and recibido.isoformat() <= ultima_fecha_iso:
+            break
 
-            nuevos.append(correo)
-
-        except:
-            pass
+        nuevos.append(correo)
 
     nuevos.reverse()
 
@@ -343,16 +400,21 @@ def procesar_correo(correo, tipo_forzado, pdf, ia, supa):
         asunto = correo.Subject
         remitente = correo.SenderEmailAddress
         entry_id = correo.EntryID
+        fecha_recibido_iso = correo.ReceivedTime.isoformat()
     except Exception as e:
         log(f"ERROR leyendo propiedades básicas del correo, se omite: {e}")
-        return None
+        return None, None
 
     log("--------------------------------------")
     log(f"Asunto: {asunto}")
     log(f"Remitente: {remitente}")
     log(f"Adjuntos: {correo.Attachments.Count}")
 
-    pdfs = guardar_adjuntos_pdf(correo)
+    try:
+        pdfs = guardar_adjuntos_pdf(correo)
+    except Exception as e:
+        log(f"ERROR guardando adjuntos del correo, se omite este correo: {e}")
+        return entry_id, fecha_recibido_iso
 
     try:
         fecha_recibido_correo = correo.ReceivedTime.strftime("%Y-%m-%d")
@@ -362,7 +424,7 @@ def procesar_correo(correo, tipo_forzado, pdf, ia, supa):
 
     if not pdfs:
         log("No hay PDFs adjuntos.")
-        return entry_id
+        return entry_id, fecha_recibido_iso
 
     for ruta_pdf in pdfs:
 
@@ -421,17 +483,38 @@ def procesar_correo(correo, tipo_forzado, pdf, ia, supa):
 
             log(f"ERROR procesando PDF: {e}")
 
-    return entry_id
+    return entry_id, fecha_recibido_iso
 
+
+def conectar_con_reintentos(correo, intentos=10, espera=10):
+    """
+    Igual que conectar(), pero reintentando en vez de morir si Outlook
+    todavía no está listo (p.ej. justo al iniciar sesión, cuando la tarea
+    programada arranca antes de que Outlook haya terminado de abrirse).
+    """
+
+    for i in range(intentos):
+        try:
+            return conectar(correo)
+        except Exception as e:
+            log(f"No se pudo conectar a '{correo}' (intento {i + 1}/{intentos}): {e}. Reintentando en {espera}s...")
+            time.sleep(espera)
+
+    raise RuntimeError(f"No se pudo conectar a '{correo}' tras {intentos} intentos")
+
+
+_lock_handle = None  # se rellena en asegurar_instancia_unica(); hay que mantener la referencia viva
 
 log("========================================")
 log("FacturaSync iniciado")
 
-carpeta_facturas = conectar(CORREO_FACTURAS)
+asegurar_instancia_unica()
+
+carpeta_facturas = conectar_con_reintentos(CORREO_FACTURAS)
 log(f"CARPETA FACTURAS CONECTADA ({CORREO_FACTURAS}): {carpeta_facturas.Name}")
 log(f"CORREOS EN INBOX FACTURAS: {carpeta_facturas.Items.Count}")
 
-carpeta_albaranes = conectar(CORREO_ALBARANES)
+carpeta_albaranes = conectar_con_reintentos(CORREO_ALBARANES)
 log(f"CARPETA ALBARANES CONECTADA ({CORREO_ALBARANES}): {carpeta_albaranes.Name}")
 log(f"CORREOS EN INBOX ALBARANES: {carpeta_albaranes.Items.Count}")
 
@@ -454,21 +537,36 @@ while True:
         estado = cargar_estado()
 
         # ── FACTURAS (facturas@olivillatres.com) ──
-        nuevos_facturas = obtener_nuevos(carpeta_facturas, estado["ultimo_entryid_facturas"])
+        nuevos_facturas = obtener_nuevos(carpeta_facturas, estado["ultima_fecha_facturas"])
 
         for correo in nuevos_facturas:
-            entry_id = procesar_correo(correo, "factura", pdf, ia, supa)
-            if entry_id:
-                estado["ultimo_entryid_facturas"] = entry_id
+
+            try:
+                entry_id, fecha_recibido_iso = procesar_correo(correo, "factura", pdf, ia, supa)
+            except Exception as e:
+                log(f"ERROR procesando correo de facturas, se omite y se continúa con el siguiente: {e}")
+                entry_id, fecha_recibido_iso = None, None
+
+            # Se avanza el cursor aunque el correo haya fallado (siempre que
+            # se haya podido leer su fecha), para que un correo problemático
+            # no bloquee para siempre a los que llegan detrás.
+            if fecha_recibido_iso:
+                estado["ultima_fecha_facturas"] = fecha_recibido_iso
                 guardar_estado(estado)
 
         # ── ALBARANES (almacen@olivillatres.com) ──
-        nuevos_albaranes = obtener_nuevos(carpeta_albaranes, estado["ultimo_entryid_albaranes"])
+        nuevos_albaranes = obtener_nuevos(carpeta_albaranes, estado["ultima_fecha_albaranes"])
 
         for correo in nuevos_albaranes:
-            entry_id = procesar_correo(correo, "albaran", pdf, ia, supa)
-            if entry_id:
-                estado["ultimo_entryid_albaranes"] = entry_id
+
+            try:
+                entry_id, fecha_recibido_iso = procesar_correo(correo, "albaran", pdf, ia, supa)
+            except Exception as e:
+                log(f"ERROR procesando correo de albaranes, se omite y se continúa con el siguiente: {e}")
+                entry_id, fecha_recibido_iso = None, None
+
+            if fecha_recibido_iso:
+                estado["ultima_fecha_albaranes"] = fecha_recibido_iso
                 guardar_estado(estado)
 
     except Exception as e:
@@ -488,8 +586,8 @@ while True:
                 time.sleep(INTERVALO)
 
                 try:
-                    carpeta_facturas = conectar(CORREO_FACTURAS)
-                    carpeta_albaranes = conectar(CORREO_ALBARANES)
+                    carpeta_facturas = conectar_con_reintentos(CORREO_FACTURAS, intentos=1)
+                    carpeta_albaranes = conectar_con_reintentos(CORREO_ALBARANES, intentos=1)
                     log("Reconectado a Outlook (facturas y albaranes).")
                     reconectado = True
 

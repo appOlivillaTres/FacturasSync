@@ -1,12 +1,12 @@
-# obtener_ultimo_entryid.py — ejecútalo UNA vez desde la carpeta FacturasSync
+# obtener_ultimo_entryid_facturas.py
 from outlook_service import conectar
-from config import CORREO_ALBARANES
+from config import CORREO_FACTURAS
 
-carpeta = conectar(CORREO_ALBARANES)
+carpeta = conectar(CORREO_FACTURAS)
 mensajes = carpeta.Items
-mensajes.Sort("[ReceivedTime]", True)  # más reciente primero
+mensajes.Sort("[ReceivedTime]", True)
 
 ultimo = mensajes.GetFirst()
-print("EntryID del correo más reciente en", CORREO_ALBARANES, ":")
+print("EntryID del correo más reciente en", CORREO_FACTURAS, ":")
 print(ultimo.EntryID)
 print("Asunto:", ultimo.Subject, "| Recibido:", ultimo.ReceivedTime)
