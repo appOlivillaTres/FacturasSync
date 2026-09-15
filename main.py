@@ -335,43 +335,32 @@ def procesar_pdf_factura(ruta_pdf, datos, remitente, asunto, fecha_recibido_corr
 
     elif proveedor and datos.get("total"):
 
-        destino = proveedor["destino"]
+        destino = proveedor.get("destino")
 
         if destino == "obra":
-
-            resultado_ins = supa.insertar_factura(
-                datos,
-                "facturas_obra",
-                archivo_url=archivo_url
-            )
-
-            log("Factura insertada en OBRA")
-
-            supa.marcar_albaranes_facturados(
-                numeros_albaran_detectados,
-                datos.get("nif"),
-                "facturas_obra",
-                resultado_ins["id"],
-                numero_pedido=datos.get("numero_pedido")
-            )
-
+            tabla_destino = "facturas_obra"
+        elif destino == "csg":
+            tabla_destino = "facturas_csg"
+        elif destino == "gastos_generales":
+            tabla_destino = "facturas_gastos_generales"
         else:
+            tabla_destino = "facturas_almacen"
 
-            resultado_ins = supa.insertar_factura(
-                datos,
-                "facturas_almacen",
-                archivo_url=archivo_url
-            )
+        resultado_ins = supa.insertar_factura(
+            datos,
+            tabla_destino,
+            archivo_url=archivo_url
+        )
 
-            log("Factura insertada en ALMACÉN")
+        log(f"Factura insertada en {tabla_destino.upper()} (destino='{destino}')")
 
-            supa.marcar_albaranes_facturados(
-                numeros_albaran_detectados,
-                datos.get("nif"),
-                "facturas_almacen",
-                resultado_ins["id"],
-                numero_pedido=datos.get("numero_pedido")
-            )
+        supa.marcar_albaranes_facturados(
+            numeros_albaran_detectados,
+            datos.get("nif"),
+            tabla_destino,
+            resultado_ins["id"],
+            numero_pedido=datos.get("numero_pedido")
+        )
 
     else:
 

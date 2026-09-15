@@ -30,6 +30,10 @@ REVISORES = {
         {"nombre": "Emilio", "email": "efernandez@olivillatres.com"},
         {"nombre": "Cynthia", "email": "cynthiagomez@olivillatres.com"},
     ],
+        "facturas_gastos_generales": [
+        {"nombre": "Cynthia", "email": "cynthiagomez@olivillatres.com"},
+        {"nombre": "Emilio", "email": "efernandez@olivillatres.com"},
+    ],
     "ingresos":[
         {"nombre":"Emilio", "email": "efernandez@olivillatres.com"},
         {"nombre": "Angel", "email": "angelperez@olivillatres.com"},
@@ -298,8 +302,7 @@ class SupabaseService:
 
         resultado = r.json()[0]
 
-        if tabla in ("facturas_obra", "facturas_almacen", "facturas_csg"):
-
+        if tabla in ("facturas_obra", "facturas_almacen", "facturas_csg", "facturas_gastos_generales"):
             try:
                 self.notificar_revision(tabla, resultado)
             except Exception as e:
@@ -322,6 +325,8 @@ class SupabaseService:
             tipo = "revision_obra"
         elif tabla == "facturas_csg":
             tipo = "revision_csg"
+        elif tabla == "facturas_gastos_generales":
+            tipo = "revision_gastos_generales"
         else:
             tipo = "revision_almacen"
 
@@ -387,12 +392,12 @@ class SupabaseService:
         return nombre.strip()
 
     def buscar_duplicado(self, numero_factura=None, nif=None, fecha=None, total=None):
+        
         """
-        Comprueba si una factura ya existe en facturas_almacen o facturas_obra,
+        Comprueba si una factura ya existe en facturas_almacen o facturas_obra o facturas_csg o facturas_gastos_generales,
         para no insertarla dos veces si llega reenviada por correo.
         """
-
-        tablas = ["facturas_almacen", "facturas_obra", "facturas_csg"]
+        tablas = ["facturas_almacen", "facturas_obra", "facturas_csg", "facturas_gastos_generales"]
 
         # 1º intento: por número de factura (más fiable si existe)
         if numero_factura:
