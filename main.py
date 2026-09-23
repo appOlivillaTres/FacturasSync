@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sys
 import time
@@ -51,6 +52,25 @@ def _es_albaran_propio(empresa, nif):
             return True
 
     return False
+
+
+def _borrar_temporal(ruta_pdf):
+    """
+    Borra el PDF local de la carpeta 'temp' una vez que ya está a salvo en
+    Supabase Storage (o se ha decidido no guardarlo). Antes se quedaban
+    ahí acumulados para siempre; ahora 'temp' vuelve a ser de verdad
+    temporal. Si el borrado falla (p.ej. el archivo está bloqueado en ese
+    instante), solo se avisa en el log — no se interrumpe el proceso por
+    esto.
+    """
+
+    try:
+        os.remove(ruta_pdf)
+        log(f"'{ruta_pdf}' borrado de temp (ya está en Supabase Storage)")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log(f"AVISO: no se pudo borrar '{ruta_pdf}' de temp: {e}")
 
 
 LOCK_FILE = "facturasync.lock"
@@ -247,6 +267,7 @@ def procesar_pdf_albaran(ruta_pdf, datos, pdf, ia, supa):
             f"NIF '{datos_albaran.get('nif')}') es nuestra propia empresa — "
             f"es una copia de un albarán ya enviado por nosotros, no se inserta"
         )
+        _borrar_temporal(ruta_pdf)
         return
 
     archivo_url_alb = None
@@ -254,6 +275,11 @@ def procesar_pdf_albaran(ruta_pdf, datos, pdf, ia, supa):
         archivo_url_alb = supa.subir_archivo(ruta_pdf)
     except Exception as e:
         log(f"ERROR subiendo albarán a Storage: {e}")
+
+    if archivo_url_alb:
+        _borrar_temporal(ruta_pdf)
+    else:
+        log(f"AVISO: '{ruta_pdf}' se queda en temp porque no se pudo subir a Storage")
 
     supa.insertar_albaran(datos_albaran, archivo_url=archivo_url_alb)
     log("Albarán insertado en tabla albaranes")
@@ -348,6 +374,11 @@ def procesar_pdf_factura(ruta_pdf, datos, remitente, asunto, fecha_recibido_corr
         archivo_url = supa.subir_archivo(ruta_pdf)
     except Exception as e:
         log(f"ERROR subiendo PDF a Storage: {e}")
+
+    if archivo_url:
+        _borrar_temporal(ruta_pdf)
+    else:
+        log(f"AVISO: '{ruta_pdf}' se queda en temp porque no se pudo subir a Storage")
 
     proveedor = supa.buscar_proveedor(
         nif=datos.get("nif"),
@@ -490,6 +521,11 @@ def procesar_correo(correo, tipo_forzado, pdf, ia, supa):
                     archivo_url_pend = supa.subir_archivo(ruta_pdf)
                 except Exception as e:
                     log(f"ERROR subiendo PDF no identificado a Storage: {e}")
+
+                if archivo_url_pend:
+                    _borrar_temporal(ruta_pdf)
+                else:
+                    log(f"AVISO: '{ruta_pdf}' se queda en temp porque no se pudo subir a Storage")
 
                 supa.insertar_factura(
                     {
