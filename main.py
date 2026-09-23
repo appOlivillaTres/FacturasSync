@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -14,8 +15,42 @@ from recordatorios_service import RecordatoriosService
 from logger import log
 from config import (
     ESTADO_FILE, INTERVALO, INTERVALO_RECORDATORIOS,
-    CORREO_FACTURAS, CORREO_ALBARANES,
+    CORREO_FACTURAS, CORREO_ALBARANES, NIF_PROPIO,
 )
+
+
+def _es_albaran_propio(empresa, nif):
+    """
+    Detecta si el "proveedor emisor" leído de un albarán es en realidad
+    nuestra propia empresa (Aislamientos Olivilla Tres S.L.U. / Olivilla
+    Tres S.L.U.), en cualquiera de sus variantes de nombre. Esto pasa
+    cuando lo que llega al buzón de albaranes no es un albarán de un
+    proveedor, sino una copia de un albarán que NOSOTROS le enviamos a un
+    cliente (p.ej. reenviado o en copia por error) — no debe insertarse en
+    la tabla de albaranes.
+
+    Se comprueba primero por NIF (más fiable) y, si no hay NIF o no
+    coincide, por el nombre normalizado (sin acentos/puntuación, sin el
+    prefijo "AISLAMIENTOS" ni el sufijo de forma societaria "SLU"/"S.L.U.").
+    """
+
+    if nif:
+        nif_normalizado = re.sub(r"[^A-Z0-9]", "", str(nif).upper())
+        if nif_normalizado == NIF_PROPIO.upper():
+            return True
+
+    if empresa:
+
+        nombre = str(empresa).upper()
+        nombre = re.sub(r"[^A-ZÑ0-9 ]+", " ", nombre)
+        nombre = re.sub(r"\bAISLAMIENTOS\b", "", nombre)
+        nombre = re.sub(r"\bS\s*L\s*U\b", "", nombre)
+        nombre = " ".join(nombre.split())
+
+        if nombre == "OLIVILLA TRES":
+            return True
+
+    return False
 
 
 LOCK_FILE = "facturasync.lock"
@@ -200,6 +235,19 @@ def procesar_pdf_albaran(ruta_pdf, datos, pdf, ia, supa):
 
         except Exception as e:
             log(f"ERROR buscando NIF por nombre de proveedor: {e}")
+
+    # Si el "proveedor emisor" detectado es en realidad nuestra propia
+    # empresa (Aislamientos Olivilla Tres / Olivilla Tres S.L.U.), este
+    # PDF no es un albarán de un proveedor: es una copia de un albarán
+    # que nosotros mismos enviamos, así que no se inserta en la tabla de
+    # albaranes.
+    if _es_albaran_propio(datos_albaran.get("empresa"), datos_albaran.get("nif")):
+        log(
+            f"'{ruta_pdf}' descartado: el emisor detectado ('{datos_albaran.get('empresa')}', "
+            f"NIF '{datos_albaran.get('nif')}') es nuestra propia empresa — "
+            f"es una copia de un albarán ya enviado por nosotros, no se inserta"
+        )
+        return
 
     archivo_url_alb = None
     try:
